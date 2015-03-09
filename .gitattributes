@@ -1,4 +1,4 @@
 # Set package/test .txt files to LF line endings 
 # Otherwise nodeunit fails the tests
 
-package/test_*.txt eol=lf
+* .txt eol=lf
