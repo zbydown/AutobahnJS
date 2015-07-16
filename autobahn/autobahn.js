@@ -259,7 +259,7 @@ var global = this;
    ab._debugrpc = false;
    ab._debugpubsub = false;
    ab._debugws = false;
-   ab._debugconnect = false;
+   ab._debugconnect = true;
 
    ab.debug = function (debugWamp, debugWs, debugConnect) {
       if ("console" in root) {
@@ -644,6 +644,46 @@ var global = this;
          self._websocket_onclose = null;
          self._websocket = null;
       };
+	  if(self._options.retryWhenOnline == true){
+		try{
+			var offline_handler = function(e){
+				 if (ab._debugws) {
+					if (self._websocket_connected) {
+						console.log("Connection Lost,noticed by Browser.");
+					} else {
+						console.log("Could not Connect,noticed by Browser.");
+					}
+				 }
+				console.log(self._websocket_onclose);
+				 if (self._websocket_onclose !== undefined) {
+					if(self._websocket_onclose === null){
+						root.removeEventListener("offline",offline_handler,false);
+						return;
+					}
+					console.log("Now we are here _websocket_connected");
+					console.log(self._websocket_connected);
+					if (self._websocket_connected) {
+						// connection lost(noticed by Browser)
+						console.log("Connection Lost,noticed by Browser!!!");					  
+						self._websocket_onclose(ab.CONNECTION_LOST); 
+					} else {
+					   // connection could not be established in the first place
+					   self._websocket_onclose(ab.CONNECTION_UNREACHABLE);
+					}
+				 }
+
+				 // cleanup - reconnect requires a new session object!
+				 self._websocket_connected = false;
+				 self._wsuri = null;
+				 self._websocket_onopen = null;
+				 self._websocket_onclose = null;
+				 self._websocket.onmessage = null;			// Needed!	 
+				 self._websocket = null;
+				 console.log("Cleaned?"+self._session_id);
+			}	  		
+			  root.addEventListener("offline",offline_handler,false);
+		}catch(e){ if(!!root.console){console.log("Your Browser does not support offline detection.");}};
+	  }
 
       self.log = function () {
          if (self._options && 'sessionIdent' in self._options) {
@@ -1004,79 +1044,128 @@ var global = this;
                   peer.onHangup(code, "Browser does not support WebSocket.");
                   break;
 
-               case ab.CONNECTION_UNREACHABLE:
+			   case ab.CONNECTION_UNREACHABLE:
 
-                  peer.retryCount += 1;
+					peer.retryCount += 1;
 
-                  if (peer.connects === 0) {
+					if (peer.connects === 0) {
 
-                     // the connection could not be established in the first place
-                     // which likely means invalid server WS URI or such things
-                     peer.onHangup(code, "Connection could not be established.");
+						// the connection could not be established in the first place
+						// which likely means invalid server WS URI or such things
+						peer.onHangup(code, "Connection could not be established.");
 
-                  } else {
+					} else {
 
-                     // the connection was established at least once successfully,
-                     // but now lost .. sane thing is to try automatic reconnects
-                     if (peer.retryCount <= peer.options.maxRetries) {
+						// the connection was established at least once successfully,
+						// but now lost .. sane thing is to try automatic reconnects
+						if (peer.retryCount <= peer.options.maxRetries  ) {
+							console.log("preparing retry!");
 
-                        // notify the app of scheduled reconnect
-                        stop = peer.onHangup(ab.CONNECTION_UNREACHABLE_SCHEDULED_RECONNECT,
-                                             "Connection unreachable - scheduled reconnect to occur in " + (peer.options.retryDelay / 1000) + " second(s) - attempt " + peer.retryCount + " of " + peer.options.maxRetries + ".",
-                                             {delay: peer.options.retryDelay,
-                                              retries: peer.retryCount,
-                                              maxretries: peer.options.maxRetries});
+							// notify the app of scheduled reconnect
+							stop = peer.onHangup(ab.CONNECTION_UNREACHABLE_SCHEDULED_RECONNECT,
+								"Connection unreachable - scheduled reconnect to occur in " + (peer.options.retryDelay / 1000) + " second(s) - attempt " + peer.retryCount + " of " + peer.options.maxRetries + ".",
+								{delay: peer.options.retryDelay,
+									retries: peer.retryCount,
+									maxretries: peer.options.maxRetries});
 
-                        if (!stop) {
-                           if (ab._debugconnect) {
-                               console.log("Connection unreachable - retrying (" + peer.retryCount + ") ..");
-                           }
-                           root.setTimeout(function () {
-                                ab._connect(peer);
-                            }, peer.options.retryDelay);
-                        } else {
-                           if (ab._debugconnect) {
-                               console.log("Connection unreachable - retrying stopped by app");
-                           }
-                           peer.onHangup(ab.CONNECTION_RETRIES_EXCEEDED, "Number of connection retries exceeded.");
-                        }
+							if (!stop) { //is onhangup function exists and return true,no retry will occur.
+								if(peer.options.retryWhenOnline===true?(root.navigator.onLine===true||root.navigator.onLine===undefined):true) {
+									console.log("Connection unreachable 1");								
+									if (ab._debugconnect) {
+										console.log("Connection unreachable - retrying (" + peer.retryCount + ") ..");
+									}
+									root.setTimeout(function () {
+										ab._connect(peer);
+									}, peer.options.retryDelay);
+								}else if(peer.options.retryWhenOnline===true){
+									console.log("Connection unreachable 2");	
+									var online_retry = function(e) {
+										if (ab._debugconnect) {
+											console.log("Online again! - retrying ..");
+										}
+										root.setTimeout(function () {
+											ab._connect(peer);
+										}, peer.options.retryDelay);
+									};
+									if(peer.online_listener != true) {
+										try{
+											root.addEventListener("online", online_retry, false);
+											peer.online_listener = true;
+											if (ab._debugconnect) {
+												console.log("New online listener is added ..");
+											}
+										}catch(e){if(console){console.log("Your Browser does not support online/offline detection.")};}
+									}
+								}
+							} else {
+								if (ab._debugconnect) {
+									console.log("Connection unreachable - retrying stopped by app");
+								}
+								peer.onHangup(ab.CONNECTION_RETRIES_EXCEEDED, "Connection unreachable - retrying stopped by app.");
+							}
 
-                     } else {
-                        peer.onHangup(ab.CONNECTION_RETRIES_EXCEEDED, "Number of connection retries exceeded.");
-                     }
-                  }
-                  break;
+						} else {
+							peer.onHangup(ab.CONNECTION_RETRIES_EXCEEDED, "Number of connection retries exceeded.");
+						}
+					}
+					break;
 
-               case ab.CONNECTION_LOST:
+			   case ab.CONNECTION_LOST:
 
-                  peer.retryCount += 1;
+					peer.retryCount += 1;
 
-                  if (peer.retryCount <= peer.options.maxRetries) {
+					if (peer.retryCount <= peer.options.maxRetries) {
+					
+						console.log("preparing retry!");
 
-                     // notify the app of scheduled reconnect
-                     stop = peer.onHangup(ab.CONNECTION_LOST_SCHEDULED_RECONNECT,
-                                          "Connection lost - scheduled " + peer.retryCount + "th reconnect to occur in " + (peer.options.retryDelay / 1000) + " second(s).",
-                                          {delay: peer.options.retryDelay,
-                                           retries: peer.retryCount,
-                                           maxretries: peer.options.maxRetries});
+						// notify the app of scheduled reconnect
+						stop = peer.onHangup(ab.CONNECTION_LOST_SCHEDULED_RECONNECT,
+							"Connection lost - scheduled " + peer.retryCount + "th reconnect to occur in " + (peer.options.retryDelay / 1000) + " second(s).",
+							{delay: peer.options.retryDelay,
+								retries: peer.retryCount,
+								maxretries: peer.options.maxRetries});
 
-                     if (!stop) {
-                        if (ab._debugconnect) {
-                            console.log("Connection lost - retrying (" + peer.retryCount + ") ..");
-                        }
-                        root.setTimeout(function () {
-                                ab._connect(peer);
-                            }, peer.options.retryDelay);
-                     } else {
-                        if (ab._debugconnect) {
-                            console.log("Connection lost - retrying stopped by app");
-                        }
-                        peer.onHangup(ab.CONNECTION_RETRIES_EXCEEDED, "Connection lost.");
-                     }
-                  } else {
-                     peer.onHangup(ab.CONNECTION_RETRIES_EXCEEDED, "Connection lost.");
-                  }
-                  break;
+						if (!stop) {
+							if(peer.options.retryWhenOnline===true?(root.navigator.onLine===true||root.navigator.onLine===undefined):true) {
+								console.log("CONNECTION_LOST 1");
+								console.log(peer.options.retryWhenOnline);
+								console.log(root.navigator.onLine);
+								if (ab._debugconnect) {
+									console.log("Connection lost - retrying (" + peer.retryCount + ") ..");
+								}
+								root.setTimeout(function () {
+									ab._connect(peer);
+								}, peer.options.retryDelay);
+							}else if(peer.options.retryWhenOnline===true){
+								console.log("CONNECTION_LOST 2");
+								var online_retry = function(e) {
+									if (ab._debugconnect) {
+										console.log("Online again! - retrying ..");
+									}
+									root.setTimeout(function () {
+										ab._connect(peer);
+									}, peer.options.retryDelay);
+								};
+								if(peer.online_listener != true) {
+									try{
+										root.addEventListener("online", online_retry, false);
+										peer.online_listener = true;
+										if (ab._debugconnect) {
+											console.log("New online listener is added ..");
+										}
+									}catch(e){if(console){console.log("Your Browser does not support online/offline detection.")};}
+								}
+							}
+						} else {
+							if (ab._debugconnect) {
+								console.log("Connection lost - retrying stopped by app");
+							}
+							peer.onHangup(ab.CONNECTION_RETRIES_EXCEEDED, "Connection lost.");
+						}
+					} else {
+						peer.onHangup(ab.CONNECTION_RETRIES_EXCEEDED, "Connection lost.");
+					}
+			   break;
 
                default:
                   throw "unhandled close code in ab._connect";
@@ -1106,7 +1195,11 @@ var global = this;
       if (peer.options.maxRetries === undefined) {
          peer.options.maxRetries = 10;
       }
-
+	  
+      if (peer.options.retryWhenOnline === undefined) {
+         peer.options.retryWhenOnline = true;
+      }
+	  
       if (peer.options.skipSubprotocolCheck === undefined) {
          peer.options.skipSubprotocolCheck = false;
       }
@@ -1133,6 +1226,7 @@ var global = this;
 
       peer.connects = 0; // total number of successful connects
       peer.retryCount = 0; // number of retries since last successful connect
+	  peer.online_listener = false;
 
       ab._connect(peer);
    };
@@ -1228,3 +1322,4 @@ var global = this;
 
    return ab;
 }));
+
